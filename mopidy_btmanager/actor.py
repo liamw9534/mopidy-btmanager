@@ -62,7 +62,8 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         # properties we get given in this signal handler to provide the
         # mandatory device fields
         uuids = device_info.get('UUIDs', [])
-        dev = BTDeviceManager._make_device(device_info['Name'],
+        name = device_info.get('Name')
+        dev = BTDeviceManager._make_device(name,
                                            device_addr,
                                            uuids)
         device.DeviceListener.send('device_found', device=dev)
