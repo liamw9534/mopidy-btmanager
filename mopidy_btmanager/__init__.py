@@ -21,6 +21,7 @@ class Extension(ext.Extension):
         schema = super(Extension, self).get_config_schema()
         schema['name'] = config.String()
         schema['pincode'] = config.String()
+        schema['autoconnect'] = config.Boolean()
         return schema
 
     def validate_environment(self):

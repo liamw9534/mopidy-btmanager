@@ -5,11 +5,12 @@ import pykka
 import bt_manager
 import dbus
 
-from mopidy import device, exceptions
+from mopidy import device, exceptions, models
 
 logger = logging.getLogger(__name__)
 
 BLUETOOTH_DEVICE_TYPE = 'bluetooth'
+
 
 class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
     """
@@ -31,19 +32,18 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         super(BTDeviceManager, self).__init__()
         self.device_types = [BLUETOOTH_DEVICE_TYPE]
         self.config = config
+        self.devices = {}
+        self.autoconnect = config['btmanager']['autoconnect']
 
     def _on_device_created(self, signal_name, user_arg, path):
         bt_device = bt_manager.BTDevice(dev_path=path)
-        bt_device.add_signal_receiver(self._on_device_property_changed,
-                                      bt_manager.BTAdapter.SIGNAL_PROPERTY_CHANGED,
-                                      path)
         dev = BTDeviceManager._make_device(bt_device.Name,
                                            bt_device.Address,
                                            bt_device.UUIDs)
         device.DeviceListener.send('device_created', device=dev)
         logger.info('BTDeviceManager event=device_created dev=%s', dev)
 
-    def _on_device_removed(self, path):
+    def _on_device_removed(self, signal_name, user_arg, path):
         # We can't access the device object from the dbus registry, since
         # it no longer exists.  We therefore have to translate the device
         # path to a device address
@@ -69,11 +69,13 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         device.DeviceListener.send('device_found', device=dev)
         logger.info('BTDeviceManager event=device_found dev=%s', dev)
 
+        # Try to autoconnect if this is enabled
+        if (self.autoconnect):
+            self.connect(dev)
+
     def _on_device_property_changed(self, signal_name, path, prop, value):
-        bt_device = bt_manager.BTDevice(dev_path=path)
-        dev = BTDeviceManager._make_device(bt_device.Name,
-                                           bt_device.Address,
-                                           bt_device.UUIDs)
+        device_addr = path[-17:].replace('_', ':')
+        dev = BTDeviceManager._make_device(None, device_addr, [])
         property_dict = {}
         property_dict[prop] = value
         logger.info('BTDeviceManager event=device_property_changed dev=%s %s=%s', dev,
@@ -97,15 +99,14 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
             return device.DeviceCapability.DEVICE_AUDIO_SINK
         elif (service.name == 'AVRemoteControl'):
             return device.DeviceCapability.DEVICE_INPUT_CONTROL
+        elif (service.name == 'HumanInterfaceDeviceService'):
+            return device.DeviceCapability.DEVICE_INPUT_CONTROL
         else:
             return None
 
     @staticmethod
     def _make_device(name, addr, uuids):
-        dev = BluetoothDevice()
-        dev.name = name
-        dev.address = addr
-        dev.capability = []
+        capabilities = []
         # Check for supported UUIDs and translate to respective capability
         for i in uuids:
             uuid = bt_manager.BTUUID(i)
@@ -113,42 +114,45 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
             if (service):
                 cap = BTDeviceManager._service_to_capability(service)
                 if (cap is not None):
-                    dev.capability.append(cap)
-        return dev
+                    capabilities.append(cap)
+        return models.Device(device_type=BLUETOOTH_DEVICE_TYPE,
+                             name=name,
+                             address=addr,
+                             capabilities=capabilities)
 
-    def _device_created_ok(self, path):
-        # Mark device is trusted to allow future connections
+    def _on_device_created_ok(self, path):
+        logger.info('BTDeviceManager device=%s created ok', path)
         bt_device = bt_manager.BTDevice(dev_path=path)
+        bt_device.discover_services()
+        bt_device.add_signal_receiver(self._on_device_property_changed,
+                                      bt_manager.BTAdapter.SIGNAL_PROPERTY_CHANGED,
+                                      path)
         bt_device.Trusted = True
-        dev = BTDeviceManager._make_device(bt_device.Name,
-                                           bt_device.Address,
-                                           bt_device.UUIDs)
-        device.DeviceListener.send('device_created', device=dev)
-        logger.info('BTDeviceManager event=device_created dev=%s', dev)
+        self.devices[str(path)] = bt_device
 
-    def _device_created_error(self, error):
-        logger.error('BTDeviceManager device creation error:%s', error)
+    def _on_device_created_error(self, error):
+        logger.error('BTDeviceManager device creation error: %s', error)
 
-    def _request_confirmation(self, path, pass_key):
-        bt_device = bt_manager.BTDevice(dev_path=path)
-        dev = BTDeviceManager._make_device(bt_device.Name,
-                                              bt_device.Address,
-                                              bt_device.UUIDs)
+    def _on_request_confirmation(self, event, path, pass_key):
+        device_addr = path[-17:].replace('_', ':')
+        dev = BTDeviceManager._make_device(None, device_addr, [])
         device.DeviceListener.send('device_pass_key_confirmation',
                                    device=dev,
                                    pass_key=pass_key)
         logger.info('BTDeviceManager event=device_pass_key_confirmation dev=%s', dev)
 
-    def _request_pin_code(self, path):
-        bt_device = bt_manager.BTDevice(dev_path=path)
-        dev = BTDeviceManager._make_device(bt_device.Name,
-                                           bt_device.Address,
-                                           bt_device.UUIDs)
+    def _on_request_pin_code(self, event, path):
+        pin_code = self.config['btmanager']['pincode']
+        device_addr = path[-17:].replace('_', ':')
+        dev = BTDeviceManager._make_device(None, device_addr, [])
         device.DeviceListener.send('device_pin_code_requested',
                                    device=dev,
-                                   pin_code=self.config['btmanager']['pincode'])
+                                   pin_code=pin_code)
         logger.info('BTDeviceManager event=device_pin_code_requested dev=%s', dev)
-        return dbus.String(self.config['btmanager']['pincode'])
+        return dbus.String(pin_code)
+
+    def _on_release(self):
+        logger.info('BTDeviceManager agent released')
 
     def on_start(self):
         """
@@ -179,25 +183,13 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
             bt_device.add_signal_receiver(self._on_device_property_changed,
                                           bt_manager.BTAdapter.SIGNAL_PROPERTY_CHANGED,
                                           i)
+            self.devices[str(i)] = bt_device
 
         # Enable device discovery
         adapter.start_discovery()
 
         # Store away adapter for future usage
         self.adapter = adapter
-
-        # Register agent for handling device pairing/authentication
-        try:
-            path = '/mopidy/agent'
-            caps = 'DisplayYesNo'
-            pin_code = self.config['btmanager']['pincode']
-            self.agent = bt_manager.BTAgent(path=path,
-                                            default_pin_code=pin_code,
-                                            cb_notify_on_request_pin_code=self._request_pin_code,
-                                            cb_notify_on_request_confirmation=self._request_confirmation)
-            self.adapter.register_agent(path, caps)
-        except:
-            raise exceptions.ExtensionError('Unable to register agent')
 
         logger.info('BTDeviceManager started')
 
@@ -206,17 +198,10 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         Put the BT adapter into idle mode.
         """
 
-        # Unregister bluetooth agent
-        try:
-            self.adapter.unregister_agent('/mopidy/agent')
-        except:
-            pass
-
-        # Remove device events
-        bt_devices = self.adapter.list_devices()
-        for i in bt_devices:
-            bt_device = bt_manager.BTDevice(dev_path=i)
-            bt_device.remove_signal_receiver(bt_manager.BTAdapter.SIGNAL_PROPERTY_CHANGED)
+        # Cleanup device events
+        for i in self.devices.keys():
+            d = self.devices.pop(i)
+            d.remove_signal_receiver(bt_manager.BTAdapter.SIGNAL_PROPERTY_CHANGED)
 
         # Stop discovery
         self.adapter.stop_discovery()
@@ -234,10 +219,15 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         logger.info('BTDeviceManager stopped')
 
     def get_devices(self):
-        bt_devices = self.adapter.list_devices()
-        return [BTDeviceManager._make_device(bt_device.Name,
-                                             bt_device.Address,
-                                             bt_device.UUIDs) for bt_device in bt_devices]
+        devices = []
+        for dev in self.devices.values():
+            try:
+                devices.append(BTDeviceManager._make_device(dev.Name,
+                                                            dev.Address,
+                                                            dev.UUIDs))
+            except:
+                pass
+        return devices
 
     def enable(self):
         """
@@ -260,95 +250,132 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         Connect device's compatible profiles
         """
         logger.info('BTDeviceManager connecting dev=%s', dev)
-        if (device.DeviceCapability.DEVICE_AUDIO_SINK in dev.capabilities):
-            bt_manager.BTAudioSink(dev_id=dev.address).connect()
-        if (device.DeviceCapability.DEVICE_AUDIO_SOURCE in dev.capabilities):
-            bt_manager.BTAudioSource(dev_id=dev.address).connect()
-        if (device.DeviceCapability.DEVICE_AUDIO_SOURCE in dev.capabilities):
-            bt_manager.BTInput(dev_id=dev.address).connect()
+        try:
+            path = str(self.adapter.find_device(dev.address))
+            bt_device = self.devices.get(path)
+            if (bt_device is not None):
+                dev = BTDeviceManager._make_device(bt_device.Name,
+                                                   bt_device.Address,
+                                                   bt_device.UUIDs)
+                if (device.DeviceCapability.DEVICE_AUDIO_SINK in dev.capabilities):
+                    bt_manager.BTAudioSink(dev_id=dev.address).connect()
+                if (device.DeviceCapability.DEVICE_AUDIO_SOURCE in dev.capabilities):
+                    bt_manager.BTAudioSource(dev_id=dev.address).connect()
+                if (device.DeviceCapability.DEVICE_AUDIO_SOURCE in dev.capabilities):
+                    bt_manager.BTInput(dev_id=dev.address).connect()
+        except:
+            pass
 
     def disconnect(self, dev):
         """
         Disconnect a device
         """
         logger.info('BTDeviceManager disconnecting dev=%s', dev)
-        bt_device = bt_manager.BTDevice(dev_id=dev.address)
-        bt_device.disconnect()
+        try:
+            bt_device = bt_manager.BTDevice(dev_id=dev.address)
+            bt_device.disconnect()
+        except:
+            pass
 
     def pair(self, dev):
         """
         Pair a device
         """
-        logger.info('BTDeviceManager pairing dev=%s', dev)
-        if (self.is_paired(device) is False):
+        if (not self.is_paired(dev)):
+            logger.info('BTDeviceManager pairing dev=%s', dev)
             path = '/mopidy/agent'
+            # Register agent for handling device pairing/authentication
+            try:
+                self.adapter.unregister_agent(path)
+            except:
+                pass
 
             try:
+                self.agent = bt_manager.BTAgent(path=path,
+                                                cb_notify_on_request_pin_code=self._on_request_pin_code,
+                                                cb_notify_on_request_confirmation=self._on_request_confirmation,
+                                                cb_notify_on_release=self._on_release)
                 caps = 'DisplayYesNo'
                 self.adapter.create_paired_device(dev.address, path, caps,
-                                                  self._device_created_ok,
-                                                  self._device_created_error)
+                                                  self._on_device_created_ok,
+                                                  self._on_device_created_error)
             except:
                 raise exceptions.ExtensionError('Unable to create paired device')
+        else:
+            logger.info('BTDeviceManager dev=%s already paired', dev)
 
     def remove(self, dev):
         """
         Remove a paired device
         """
         logger.info('BTDeviceManager removing dev=%s', dev)
-        path = self.adapter.find_device(dev.address)
-        self.adapter.remove_device(path)
+        try:
+            path = str(self.adapter.find_device(dev.address))
+            if (path in self.devices):
+                bt_device = self.devices.pop(path)
+                bt_device.remove_signal_receiver(bt_manager.BTAdapter.SIGNAL_PROPERTY_CHANGED)
+                self.adapter.remove_device(path)
+        except:
+            pass
 
     def is_connected(self, dev):
         """
         Ascertain if a device is connected
         """
         try:
-            bt_device = bt_manager.BTDevice(dev_id=dev.address)
-            return bt_device.Connected
+            path = str(self.adapter.find_device(dev.address))
+            bt_device = self.devices.get(path)
+            if (bt_device.Connected):
+                return True
+            else:
+                return False
         except:
-            return False
+            pass
 
     def is_paired(self, dev):
         """
         Ascertain if a device is paired
         """
         try:
-            bt_device = bt_manager.BTDevice(dev_id=dev.address)
-            return bt_device.Paired
+            path = str(self.adapter.find_device(dev.address))
+            bt_device = self.devices.get(path)
+            if (bt_device.Paired):
+                return True
+            else:
+                return False
         except:
-            return False
+            pass
 
     def set_property(self, dev, name, value):
         """
         Set a device's property
         """
-        bt_device = bt_manager.BTDevice(dev_id=dev.address)
-        bt_device.set_property(name, value)
+        try:
+            path = str(self.adapter.find_device(dev.address))
+            bt_device = self.devices.get(path)
+            bt_device.set_property(name, value)
+        except:
+            pass
 
     def get_property(self, dev, name=None):
         """
         Get a device's property
         """
-        bt_device = bt_manager.BTDevice(dev_id=dev.address)
-        return bt_device.get_property(name)
+        try:
+            path = str(self.adapter.find_device(dev.address))
+            bt_device = self.devices.get(path)
+            return bt_device.get_property(name)
+        except:
+            pass
 
     def has_property(self, dev, name):
         """
         Check if a device has a particular property name
         """
-        bt_device = bt_manager.BTDevice(dev_id=dev.address)
-        return name in bt_device.__dict__
-
-
-class BluetoothDevice(device.Device):
-
-    device_type = BLUETOOTH_DEVICE_TYPE
-
-    def __str__(self):
-        return '{type:' + \
-            self.device_type + ' name:' + str(self.name) + ' addr:' + str(self.address) + \
-            ' caps:' + str(self.capability) + '}'
-
-    def __repr__(self):
-        return self.__str__
+        try:
+            path = str(self.adapter.find_device(dev.address))
+            bt_device = self.devices.get(path)
+            if (bt_device):
+                return name in bt_device.__dict__
+        except:
+            pass
