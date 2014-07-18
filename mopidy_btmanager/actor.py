@@ -6,6 +6,7 @@ import bt_manager
 import dbus
 
 from mopidy import device, exceptions, models
+from sink import BluetoothAudioSink
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +29,11 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
     ..note:: This plug-in is not concerned with streaming A2DP audio to
         a device.  This should be dealt with by the Audio subsystem.
     """
-    def __init__(self, config):
+    def __init__(self, config, audio):
         super(BTDeviceManager, self).__init__()
         self.device_types = [BLUETOOTH_DEVICE_TYPE]
         self.config = config
+        self.audio = audio
         self.devices = {}
         self.autoconnect = config['btmanager']['autoconnect']
 
@@ -74,8 +76,15 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
             self.connect(dev)
 
     def _on_device_property_changed(self, signal_name, path, prop, value):
-        device_addr = path[-17:].replace('_', ':')
-        dev = BTDeviceManager._make_device(None, device_addr, [])
+
+        try:
+            bt_device = self.devices.get(path)
+            dev = BTDeviceManager._make_device(bt_device.Name,
+                                               bt_device.Address,
+                                               bt_device.UUIDs)
+        except:
+            device_addr = path[-17:].replace('_', ':')
+            dev = BTDeviceManager._make_device(None, device_addr, [])
         property_dict = {}
         property_dict[prop] = value
         logger.info('BTDeviceManager event=device_property_changed dev=%s %s=%s', dev,
@@ -153,6 +162,10 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
 
     def _on_release(self):
         logger.info('BTDeviceManager agent released')
+
+    @staticmethod
+    def _audio_sink_ident(address):
+        return BLUETOOTH_DEVICE_TYPE + ':audio:' + address
 
     def on_start(self):
         """
@@ -258,11 +271,13 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
                                                    bt_device.Address,
                                                    bt_device.UUIDs)
                 if (device.DeviceCapability.DEVICE_AUDIO_SINK in dev.capabilities):
-                    bt_manager.BTAudioSink(dev_id=dev.address).connect()
+                    ident = BTDeviceManager._audio_sink_ident(dev.address)
+                    self.audio.add_sink(ident, BluetoothAudioSink(dev.address))
                 if (device.DeviceCapability.DEVICE_AUDIO_SOURCE in dev.capabilities):
-                    bt_manager.BTAudioSource(dev_id=dev.address).connect()
-                if (device.DeviceCapability.DEVICE_AUDIO_SOURCE in dev.capabilities):
-                    bt_manager.BTInput(dev_id=dev.address).connect()
+                    pass
+                if (device.DeviceCapability.DEVICE_INPUT_CONTROL in dev.capabilities):
+                    ip = bt_manager.BTInput(dev_id=dev.address)
+                    ip.connect()
         except:
             pass
 
@@ -272,8 +287,14 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         """
         logger.info('BTDeviceManager disconnecting dev=%s', dev)
         try:
-            bt_device = bt_manager.BTDevice(dev_id=dev.address)
-            bt_device.disconnect()
+            if (device.DeviceCapability.DEVICE_AUDIO_SINK in dev.capabilities):
+                ident = BTDeviceManager._audio_sink_ident(dev.address)
+                self.audio.remove_sink(ident)
+            if (device.DeviceCapability.DEVICE_AUDIO_SOURCE in dev.capabilities):
+                pass
+            if (device.DeviceCapability.DEVICE_INPUT_CONTROL in dev.capabilities):
+                bt_device = bt_manager.BTDevice(dev_id=dev.address)
+                bt_device.disconnect()
         except:
             pass
 
