@@ -32,4 +32,4 @@ class Extension(ext.Extension):
 
     def setup(self, registry):
         from .actor import BTDeviceManager
-        registry.add('device_manager', BTDeviceManager)
+        registry.add('service', BTDeviceManager)

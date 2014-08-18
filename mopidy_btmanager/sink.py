@@ -8,7 +8,7 @@ import gst  # noqa
 import bt_manager
 
 
-class BluetoothAudioSink(gst.Bin):
+class BluetoothAudioSink2(gst.Bin):
     def __init__(self, address):
         super(BluetoothAudioSink, self).__init__()
         a2dpsink = gst.element_factory_make('a2dpsink')
@@ -22,6 +22,25 @@ class BluetoothAudioSink(gst.Bin):
         capsfilter.set_property('caps', gst.Caps(str(caps)))
         self.add_many(queue, capsfilter, sbcenc, a2dpsink)
         gst.element_link_many(queue, capsfilter, sbcenc, a2dpsink)
+        pad = queue.get_pad('sink')
+        ghost_pad = gst.GhostPad('sink', pad)
+        self.add_pad(ghost_pad)
+
+
+class BluetoothAudioSink(gst.Bin):
+    def __init__(self, address):
+        super(BluetoothAudioSink, self).__init__()
+        pulse = gst.element_factory_make('pulsesink')
+        device = b'bluez_sink.' + str(address.replace(':', '_'))
+        pulse.set_property('device', device)
+        queue = gst.element_factory_make('queue')
+        capsfilter = gst.element_factory_make('capsfilter')
+        caps = 'audio/x-raw-int, endianness=(int)1234, channels=(int)2, ' + \
+            'width=(int)16, depth=(int)16,signed=(boolean)true, rate=(int)44100'
+        capsfilter.set_property('caps', gst.Caps(str(caps)))
+        rate = gst.element_factory_make('audiorate')
+        self.add_many(queue, capsfilter, rate, pulse)
+        gst.element_link_many(queue, capsfilter, rate, pulse)
         pad = queue.get_pad('sink')
         ghost_pad = gst.GhostPad('sink', pad)
         self.add_pad(ghost_pad)

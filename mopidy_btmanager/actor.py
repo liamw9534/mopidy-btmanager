@@ -6,11 +6,10 @@ import bt_manager
 import dbus
 
 from mopidy import device, exceptions, models
-from sink import BluetoothAudioSink
 
 logger = logging.getLogger(__name__)
 
-BLUETOOTH_DEVICE_TYPE = 'bluetooth'
+BLUETOOTH_SERVICE_NAME = 'bluetooth'
 
 
 class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
@@ -31,7 +30,7 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
     """
     def __init__(self, config, audio):
         super(BTDeviceManager, self).__init__()
-        self.device_types = [BLUETOOTH_DEVICE_TYPE]
+        self.name = BLUETOOTH_SERVICE_NAME
         self.config = config
         self.audio = audio
         self.devices = {}
@@ -124,7 +123,7 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
                 cap = BTDeviceManager._service_to_capability(service)
                 if (cap is not None):
                     capabilities.append(cap)
-        return models.Device(device_type=BLUETOOTH_DEVICE_TYPE,
+        return models.Device(device_type=BLUETOOTH_SERVICE_NAME,
                              name=name,
                              address=addr,
                              capabilities=capabilities)
@@ -165,7 +164,7 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
 
     @staticmethod
     def _audio_sink_ident(address):
-        return BLUETOOTH_DEVICE_TYPE + ':audio:' + address
+        return BLUETOOTH_SERVICE_NAME + ':audio:' + address
 
     def on_start(self):
         """
@@ -271,10 +270,11 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
                                                    bt_device.Address,
                                                    bt_device.UUIDs)
                 if (device.DeviceCapability.DEVICE_AUDIO_SINK in dev.capabilities):
-                    ident = BTDeviceManager._audio_sink_ident(dev.address)
-                    self.audio.add_sink(ident, BluetoothAudioSink(dev.address))
+                    sink = bt_manager.BTAudioSink(dev_id=dev.address)
+                    sink.connect()
                 if (device.DeviceCapability.DEVICE_AUDIO_SOURCE in dev.capabilities):
-                    pass
+                    source = bt_manager.BTAudioSource(dev_id=dev.address)
+                    source.connect()
                 if (device.DeviceCapability.DEVICE_INPUT_CONTROL in dev.capabilities):
                     ip = bt_manager.BTInput(dev_id=dev.address)
                     ip.connect()
@@ -287,14 +287,8 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         """
         logger.info('BTDeviceManager disconnecting dev=%s', dev)
         try:
-            if (device.DeviceCapability.DEVICE_AUDIO_SINK in dev.capabilities):
-                ident = BTDeviceManager._audio_sink_ident(dev.address)
-                self.audio.remove_sink(ident)
-            if (device.DeviceCapability.DEVICE_AUDIO_SOURCE in dev.capabilities):
-                pass
-            if (device.DeviceCapability.DEVICE_INPUT_CONTROL in dev.capabilities):
-                bt_device = bt_manager.BTDevice(dev_id=dev.address)
-                bt_device.disconnect()
+            bt_device = bt_manager.BTDevice(dev_id=dev.address)
+            bt_device.disconnect()
         except:
             pass
 
@@ -367,7 +361,7 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         except:
             pass
 
-    def set_property(self, dev, name, value):
+    def set_device_property(self, dev, name, value):
         """
         Set a device's property
         """
@@ -378,7 +372,7 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         except:
             pass
 
-    def get_property(self, dev, name=None):
+    def get_device_property(self, dev, name=None):
         """
         Get a device's property
         """
@@ -389,7 +383,7 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         except:
             pass
 
-    def has_property(self, dev, name):
+    def has_device_property(self, dev, name):
         """
         Check if a device has a particular property name
         """
