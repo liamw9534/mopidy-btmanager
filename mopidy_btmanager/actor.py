@@ -5,21 +5,21 @@ import pykka
 import bt_manager
 import dbus
 
-from mopidy import device, exceptions, models
+from mopidy import exceptions, service
 
 logger = logging.getLogger(__name__)
 
 BLUETOOTH_SERVICE_NAME = 'bluetooth'
 
 
-class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
+class BTDeviceManager(pykka.ThreadingActor, service.Service):
     """
     BTDeviceManager implements an autonomous bluetooth device manager that
     is capable of discovering, pairing and connecting with bluetooth devices
     with profiles that are compatible with the Mopidy music player.
 
-    It implements a mopidy DeviceManager and posts events to any classes
-    mixing in the DeviceListener interface.
+    It implements a mopidy Service and posts events to any classes
+    mixing in the ServiceListener interface.
     
     The main use-case of this device manager is to notify when new
     devices are added/connected which allows Audio to commence
@@ -28,20 +28,22 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
     ..note:: This plug-in is not concerned with streaming A2DP audio to
         a device.  This should be dealt with by the Audio subsystem.
     """
-    def __init__(self, config, audio):
+    def __init__(self, config, core):
         super(BTDeviceManager, self).__init__()
         self.name = BLUETOOTH_SERVICE_NAME
-        self.config = config
-        self.audio = audio
+        self.public = True
+        self.config = dict(config['btmanager'])
         self.devices = {}
-        self.autoconnect = config['btmanager']['autoconnect']
+        self.autoconnect = self.config['autoconnect']
 
     def _on_device_created(self, signal_name, user_arg, path):
         bt_device = bt_manager.BTDevice(dev_path=path)
         dev = BTDeviceManager._make_device(bt_device.Name,
                                            bt_device.Address,
                                            bt_device.UUIDs)
-        device.DeviceListener.send('device_created', device=dev)
+        service.ServiceListener.send('bluetooth_device_created',
+                                     service=self.name,
+                                     device=dev)
         logger.info('BTDeviceManager event=device_created dev=%s', dev)
 
     def _on_device_removed(self, signal_name, user_arg, path):
@@ -50,12 +52,15 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         # path to a device address
         device_addr = path[-17:].replace('_', ':')
         dev = BTDeviceManager._make_device(None, device_addr, [])
-        device.DeviceListener.send('device_removed', device=dev)
+        service.ServiceListener.send('bluetooth_device_removed', service=self.name,
+                                     device=dev)
         logger.info('BTDeviceManager event=device_removed dev=%s', dev)
 
     def _on_device_disappeared(self, signal_name, user_arg, device_addr):
         dev = BTDeviceManager._make_device(None, device_addr, [])
-        device.DeviceListener.send('device_disappeared', device=dev)
+        service.ServiceListener.send('bluetooth_device_disappeared',
+                                     service=self.name,
+                                     device=dev)
         logger.info('BTDeviceManager event=device_disappeared dev=%s', dev)
 
     def _on_device_found(self, signal_name, user_arg, device_addr, device_info):
@@ -67,7 +72,9 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         dev = BTDeviceManager._make_device(name,
                                            device_addr,
                                            uuids)
-        device.DeviceListener.send('device_found', device=dev)
+        service.ServiceListener.send('bluetooth_device_found',
+                                     service=self.name,
+                                     device=dev)
         logger.info('BTDeviceManager event=device_found dev=%s', dev)
 
         # Try to autoconnect if this is enabled
@@ -92,23 +99,26 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         # We have dedicated events for the "Connected" property
         if (prop == 'Connected'):
             if (value):
-                device.DeviceListener.send('device_connected', device=dev)
+                service.ServiceListener.send('bluetooth_device_connected', service=self.name,
+                                             device=dev)
             else:
-                device.DeviceListener.send('device_disconnected', device=dev)
+                service.ServiceListener.send('bluetooth_device_disconnected', service=self.name,
+                                             device=dev)
         else:
-            device.DeviceListener.send('device_property_changed', device=dev,
-                                       property_dict=property_dict)
+            service.ServiceListener.send('bluetooth_device_property_changed', service=self.name,
+                                         device=dev,
+                                         property_dict=property_dict)
 
     @staticmethod
     def _service_to_capability(service):
         if (service.name == 'AudioSource'):
-            return device.DeviceCapability.DEVICE_AUDIO_SOURCE
+            return service.name
         elif (service.name == 'AudioSink'):
-            return device.DeviceCapability.DEVICE_AUDIO_SINK
+            return service.name
         elif (service.name == 'AVRemoteControl'):
-            return device.DeviceCapability.DEVICE_INPUT_CONTROL
+            return 'InputControl'
         elif (service.name == 'HumanInterfaceDeviceService'):
-            return device.DeviceCapability.DEVICE_INPUT_CONTROL
+            return 'InputControl'
         else:
             return None
 
@@ -123,10 +133,7 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
                 cap = BTDeviceManager._service_to_capability(service)
                 if (cap is not None):
                     capabilities.append(cap)
-        return models.Device(device_type=BLUETOOTH_SERVICE_NAME,
-                             name=name,
-                             address=addr,
-                             capabilities=capabilities)
+        return { 'addr': addr, 'caps': capabilities }
 
     def _on_device_created_ok(self, path):
         logger.info('BTDeviceManager device=%s created ok', path)
@@ -144,27 +151,24 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
     def _on_request_confirmation(self, event, path, pass_key):
         device_addr = path[-17:].replace('_', ':')
         dev = BTDeviceManager._make_device(None, device_addr, [])
-        device.DeviceListener.send('device_pass_key_confirmation',
-                                   device=dev,
-                                   pass_key=pass_key)
+        service.ServiceListener.send('bluetooth_pass_key_confirmation',
+                                     service=self.name,
+                                     device=dev,
+                                     pass_key=pass_key)
         logger.info('BTDeviceManager event=device_pass_key_confirmation dev=%s', dev)
 
     def _on_request_pin_code(self, event, path):
-        pin_code = self.config['btmanager']['pincode']
+        pin_code = self.config['pincode']
         device_addr = path[-17:].replace('_', ':')
         dev = BTDeviceManager._make_device(None, device_addr, [])
-        device.DeviceListener.send('device_pin_code_requested',
-                                   device=dev,
-                                   pin_code=pin_code)
+        service.ServiceListener.send('bluetooth_pin_code_requested',
+                                     device=dev,
+                                     pin_code=pin_code)
         logger.info('BTDeviceManager event=device_pin_code_requested dev=%s', dev)
         return dbus.String(pin_code)
 
     def _on_release(self):
         logger.info('BTDeviceManager agent released')
-
-    @staticmethod
-    def _audio_sink_ident(address):
-        return BLUETOOTH_SERVICE_NAME + ':audio:' + address
 
     def on_start(self):
         """
@@ -173,7 +177,7 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         adapter = bt_manager.BTAdapter()
         self.is_powered_on_start = adapter.Powered
         adapter.Powered = True
-        adapter.Name = self.config['btmanager']['name']
+        adapter.Name = self.config['name']
 
         adapter.add_signal_receiver(self._on_device_created,
                                     bt_manager.BTAdapter.SIGNAL_DEVICE_CREATED,
@@ -203,6 +207,9 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         # Store away adapter for future usage
         self.adapter = adapter
 
+        # Notify listeners
+        self.state = service.ServiceState.SERVICE_STATE_STARTED
+        service.ServiceListener.send('service_started', service=self.name)
         logger.info('BTDeviceManager started')
 
     def on_stop(self):
@@ -228,7 +235,27 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         # Restore initial power-up state
         self.adapter.Powered = self.is_powered_on_start
         self.adapter = None
+
+        # Notify listeners
+        self.state = service.ServiceState.SERVICE_STATE_STOPPED
+        service.ServiceListener.send('service_stopped', service=self.name)
         logger.info('BTDeviceManager stopped')
+
+    def set_property(self, name, value):
+        if (name in self.config):
+            self.config[name] = value
+            self.on_stop()
+            self.on_start()
+
+    def get_property(self, name):
+        if (name is None):
+            return self.config
+        else:
+            try:
+                value = self.config[name]
+                return { name: value }
+            except:
+                return None
 
     def get_devices(self):
         devices = []
@@ -263,20 +290,20 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         """
         logger.info('BTDeviceManager connecting dev=%s', dev)
         try:
-            path = str(self.adapter.find_device(dev.address))
+            path = str(self.adapter.find_device(dev['addr']))
             bt_device = self.devices.get(path)
             if (bt_device is not None):
                 dev = BTDeviceManager._make_device(bt_device.Name,
                                                    bt_device.Address,
                                                    bt_device.UUIDs)
-                if (device.DeviceCapability.DEVICE_AUDIO_SINK in dev.capabilities):
-                    sink = bt_manager.BTAudioSink(dev_id=dev.address)
+                if ('AudioSink' in dev['caps']):
+                    sink = bt_manager.BTAudioSink(dev_id=dev['addr'])
                     sink.connect()
-                if (device.DeviceCapability.DEVICE_AUDIO_SOURCE in dev.capabilities):
-                    source = bt_manager.BTAudioSource(dev_id=dev.address)
+                if ('AudioSource' in dev['caps']):
+                    source = bt_manager.BTAudioSource(dev_id=dev['addr'])
                     source.connect()
-                if (device.DeviceCapability.DEVICE_INPUT_CONTROL in dev.capabilities):
-                    ip = bt_manager.BTInput(dev_id=dev.address)
+                if ('InputControl' in dev['caps']):
+                    ip = bt_manager.BTInput(dev_id=dev['addr'])
                     ip.connect()
         except:
             pass
@@ -287,7 +314,7 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         """
         logger.info('BTDeviceManager disconnecting dev=%s', dev)
         try:
-            bt_device = bt_manager.BTDevice(dev_id=dev.address)
+            bt_device = bt_manager.BTDevice(dev_id=dev['addr'])
             bt_device.disconnect()
         except:
             pass
@@ -311,7 +338,7 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
                                                 cb_notify_on_request_confirmation=self._on_request_confirmation,
                                                 cb_notify_on_release=self._on_release)
                 caps = 'DisplayYesNo'
-                self.adapter.create_paired_device(dev.address, path, caps,
+                self.adapter.create_paired_device(dev['addr'], path, caps,
                                                   self._on_device_created_ok,
                                                   self._on_device_created_error)
             except:
@@ -325,7 +352,7 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         """
         logger.info('BTDeviceManager removing dev=%s', dev)
         try:
-            path = str(self.adapter.find_device(dev.address))
+            path = str(self.adapter.find_device(dev['addr']))
             if (path in self.devices):
                 bt_device = self.devices.pop(path)
                 bt_device.remove_signal_receiver(bt_manager.BTAdapter.SIGNAL_PROPERTY_CHANGED)
@@ -338,7 +365,7 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         Ascertain if a device is connected
         """
         try:
-            path = str(self.adapter.find_device(dev.address))
+            path = str(self.adapter.find_device(dev['addr']))
             bt_device = self.devices.get(path)
             if (bt_device.Connected):
                 return True
@@ -352,7 +379,7 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         Ascertain if a device is paired
         """
         try:
-            path = str(self.adapter.find_device(dev.address))
+            path = str(self.adapter.find_device(dev['addr']))
             bt_device = self.devices.get(path)
             if (bt_device.Paired):
                 return True
@@ -366,7 +393,7 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         Set a device's property
         """
         try:
-            path = str(self.adapter.find_device(dev.address))
+            path = str(self.adapter.find_device(dev['addr']))
             bt_device = self.devices.get(path)
             bt_device.set_property(name, value)
         except:
@@ -377,7 +404,7 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         Get a device's property
         """
         try:
-            path = str(self.adapter.find_device(dev.address))
+            path = str(self.adapter.find_device(dev['addr']))
             bt_device = self.devices.get(path)
             return bt_device.get_property(name)
         except:
@@ -388,7 +415,7 @@ class BTDeviceManager(pykka.ThreadingActor, device.DeviceManager):
         Check if a device has a particular property name
         """
         try:
-            path = str(self.adapter.find_device(dev.address))
+            path = str(self.adapter.find_device(dev['addr']))
             bt_device = self.devices.get(path)
             if (bt_device):
                 return name in bt_device.__dict__
