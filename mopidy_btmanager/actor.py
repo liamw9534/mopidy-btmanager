@@ -244,6 +244,9 @@ class BTDeviceManager(pykka.ThreadingActor, service.Service):
     def set_property(self, name, value):
         if (name in self.config):
             self.config[name] = value
+            service.ServiceListener.send('service_property_changed',
+                                         service=self.name,
+                                         props={ name: value })
             self.on_stop()
             self.on_start()
 
