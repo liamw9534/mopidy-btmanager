@@ -6,6 +6,7 @@ import bt_manager
 import dbus
 
 from mopidy import exceptions, service
+from mopidy.utils.jsonrpc import private_method
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +157,7 @@ class BTDeviceManager(pykka.ThreadingActor, service.Service):
                                      device=dev,
                                      pass_key=pass_key)
         logger.info('BTDeviceManager event=device_pass_key_confirmation dev=%s', dev)
+        return dbus.UInt32(pass_key)
 
     def _on_request_pin_code(self, event, path):
         pin_code = self.config['pincode']
@@ -170,6 +172,7 @@ class BTDeviceManager(pykka.ThreadingActor, service.Service):
     def _on_release(self):
         logger.info('BTDeviceManager agent released')
 
+    @private_method
     def on_start(self):
         """
         Activate the BT adapter
@@ -212,6 +215,7 @@ class BTDeviceManager(pykka.ThreadingActor, service.Service):
         service.ServiceListener.send('service_started', service=self.name)
         logger.info('BTDeviceManager started')
 
+    @private_method
     def on_stop(self):
         """
         Put the BT adapter into idle mode.
@@ -240,6 +244,14 @@ class BTDeviceManager(pykka.ThreadingActor, service.Service):
         self.state = service.ServiceState.SERVICE_STATE_STOPPED
         service.ServiceListener.send('service_stopped', service=self.name)
         logger.info('BTDeviceManager stopped')
+
+    @private_method
+    def on_failure(self, *args):
+        pass
+
+    @private_method
+    def stop(self, *args, **kwargs):
+        return pykka.ThreadingActor.stop(self, *args, **kwargs)
 
     def set_property(self, name, value):
         if (name in self.config):
