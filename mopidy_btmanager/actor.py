@@ -343,6 +343,7 @@ class BTDeviceManager(pykka.ThreadingActor, service.Service):
             path = '/mopidy/agent'
             # Register agent for handling device pairing/authentication
             try:
+                self.agent.remove_from_connection()
                 self.adapter.unregister_agent(path)
             except:
                 pass
@@ -373,7 +374,7 @@ class BTDeviceManager(pykka.ThreadingActor, service.Service):
                 bt_device.remove_signal_receiver(bt_manager.BTAdapter.SIGNAL_PROPERTY_CHANGED)
                 self.adapter.remove_device(path)
         except:
-            pass
+            raise
 
     def is_connected(self, dev):
         """
@@ -387,7 +388,7 @@ class BTDeviceManager(pykka.ThreadingActor, service.Service):
             else:
                 return False
         except:
-            pass
+            raise
 
     def is_paired(self, dev):
         """
@@ -401,7 +402,7 @@ class BTDeviceManager(pykka.ThreadingActor, service.Service):
             else:
                 return False
         except:
-            pass
+            return False
 
     def set_device_property(self, dev, name, value):
         """

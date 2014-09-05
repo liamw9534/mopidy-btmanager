@@ -74,7 +74,7 @@ Changelog
 =========
 
 
-v0.1.0
+v0.1.0 (UNRELEASED)
 ----------------------------------------
 
 - Initial release.
