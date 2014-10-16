@@ -22,6 +22,7 @@ class Extension(ext.Extension):
         schema['name'] = config.String()
         schema['pincode'] = config.String()
         schema['autoconnect'] = config.Boolean()
+        schema['attach_audio_sink'] = config.Boolean()
         return schema
 
     def validate_environment(self):

@@ -39,23 +39,26 @@ Dbus
 
 Before starting Mopidy, you must ensure the 'audio' user group has dbus permissions
 for managing bluetooth devices.  This can be done by adding the following policy
-section into the file /etc/dbus-1/system.d/bluetooth.conf:
+section into the file /etc/dbus-1/system.d/bluetooth.conf::
 
-	<!-- allow users of audio group to communicate with bluetoothd -->
-	<policy group="audio">
-		<allow send_destination="org.bluez"/>
-	</policy>
+    <!-- allow users of audio group to communicate with bluetoothd -->
+    <policy group="audio">
+        <allow send_destination="org.bluez"/>
+    </policy>
+
 
 Extension
 ---------
 
-Add the following section to your Mopidy configuration file following installation:
+Add the following section to your Mopidy configuration file following installation::
 
-	[btmanager]
-	enabled = true
-	name = mopidy
-	pincode = 1111
-	autoconnect = true
+    [btmanager]
+    enabled = true
+    name = mopidy
+    pincode = 1111
+    autoconnect = true
+    attach_audio_sink = false
+
 
 The ``pincode`` setting is required when pairing devices with a keypad (e.g., AV remote control).
 The same ``pincode`` value must be entered during the pairing process.
@@ -66,6 +69,9 @@ connect to Mopidy.  You can change it to anything you wish.
 The ``autoconnect`` setting tells the extension to automatically connect paired devices
 as soon as they are discovered.  This can be useful if you have already paired a device
 and don't wish to use the HTTP API to connect it each time you start Mopidy.
+
+The ``attach_audio_sink`` option allows the extension to attempt to dynamically attach an
+audio sink into the GStreamer audio output subsystem, where supported.
 
 
 Bluetooth Audio
@@ -94,14 +100,15 @@ to be setup.  Here's the required content::
 
 Note: If you wish to use the gstreamer bluetooth plugin then you also need to add
 ``Socket`` to the ``Enable`` option list.  Do not add this option unless you plan
-to use the gstreamer bluetooth plugin.
+to use the gstreamer bluetooth plugin.   Note: If you are enabling
+``attach_audio_sink`` then you must ensure ``Socket`` is enabled.
 
 
 Audio Rendering
 ---------------
 
 The `mopidy-btmanager` extension will allow the user to establish bluetooth connections
-to A2DP audio sources and sinks.  However, in order to route audio to an audio sink,
+to A2DP audio sources and sinks.  However, by default, in order to route audio to an audio sink,
 you will require a separate entity that is able to push Mopidy audio onto the
 available bluetooth media (A2DP) transport.  There are a number of different ways
 of doing this:
@@ -141,7 +148,9 @@ in mopidy to the following:
 
 
 Note: At present mopidy does not support dynamic audio sink selection in its
-audio subsystem.  This means that any sink must be chosen 'a priori'
+audio subsystem.  However, where this feature is supported, the ``attach_audio_sink``
+option may be enabled to attach an audio sink dynamically for bluetooth devices
+when they are detected.  Otherwise, this means that any sink must be chosen 'a priori'
 as part of the audio ``output`` configuration, when using the ALSA sink or gstreamer
 audio rendering methods.
 
@@ -168,7 +177,7 @@ Project resources
 
 - `Source code <https://github.com/liamw9534/mopidy-btmanager>`_
 - `Issue tracker <https://github.com/liamw9534/mopidy-btmanager/issues>`_
-- `Download development snapshot <https://github.com/liamw9534/mopidy-btmanager/archive/master.tar.gz#egg=mopidy-evtdev-dev>`_
+- `Download development snapshot <https://github.com/liamw9534/mopidy-btmanager/archive/master.tar.gz#egg=mopidy-btmanager-dev>`_
 
 
 Changelog
