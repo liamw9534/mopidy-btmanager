@@ -102,7 +102,7 @@ class BTDeviceManager(pykka.ThreadingActor, service.Service):
         # We have dedicated events for the "Connected" property
         if (prop == 'Connected'):
             if (value):
-                if (self.config['attach_audio_sink']):
+                if (self.config['attach_audio_sink'] and 'AudioSink' in dev['caps']):
                     self._connect_audio_sink(dev['addr'])
                 service.ServiceListener.send('bluetooth_device_connected', service=self.name,
                                              device=dev)
